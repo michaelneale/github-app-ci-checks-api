@@ -6,6 +6,7 @@ require 'openssl'     # Verifies the webhook signature
 require 'jwt'         # Authenticates a GitHub App
 require 'time'        # Gets ISO 8601 representation of a Time object
 require 'logger'      # Logs debug statements
+require 'git'
 
 set :port, 3000
 set :bind, '0.0.0.0'
@@ -62,6 +63,28 @@ class GHAapp < Sinatra::Application
     # ADD YOUR CODE HERE  #
     # # # # # # # # # # # #
 
+    # Get the event type from the HTTP_X_GITHUB_EVENT header
+    case request.env['HTTP_X_GITHUB_EVENT']
+    when 'check_suite'
+      # A new check_suite has been created. Create a new check run with status queued
+      if @payload['action'] == 'requested' || @payload['action'] == 'rerequested'
+        create_check_run
+      end
+
+    when 'check_run'
+      # Check that the event is being sent to this app
+      if @payload['check_run']['app']['id'].to_s === APP_IDENTIFIER
+        case @payload['action']
+        when 'created'
+          initiate_check_run
+        when 'rerequested'
+          create_check_run
+        end
+      end
+
+    end
+
+
     200 # success status
   end
 
@@ -71,6 +94,87 @@ class GHAapp < Sinatra::Application
     # # # # # # # # # # # # # # # # #
     # ADD YOUR HELPER METHODS HERE  #
     # # # # # # # # # # # # # # # # #
+
+    # Clones the repository to the current working directory, updates the
+    # contents using Git pull, and checks out the ref.
+    #
+    # full_repo_name  - The owner and repo. Ex: octocat/hello-world
+    # repository      - The repository name
+    # ref             - The branch, commit SHA, or tag to check out
+    def clone_repository(full_repo_name, repository, ref)
+      @git = Git.clone("https://x-access-token:#{@installation_token.to_s}@github.com/#{full_repo_name}.git", repository)
+      pwd = Dir.getwd()
+      Dir.chdir(repository)
+      @git.pull
+      @git.checkout(ref)
+      Dir.chdir(pwd)
+    end
+
+
+    # Start the CI process
+    def initiate_check_run
+      # Once the check run is created, you'll update the status of the check run
+      # to 'in_progress' and run the CI process. When the CI finishes, you'll
+      # update the check run status to 'completed' and add the CI results.
+
+      # Octokit doesn't yet support the Checks API, but it does provide generic
+      # HTTP methods you can use:
+      # https://developer.github.com/v3/checks/runs/#update-a-check-run
+      updated_check_run = @installation_client.patch(
+        "repos/#{@payload['repository']['full_name']}/check-runs/#{@payload['check_run']['id']}",
+        {
+          accept: 'application/vnd.github.antiope-preview+json', # This header is necessary for beta access to Checks API
+          name: 'Octo RuboCop',
+          status: 'in_progress',
+          started_at: Time.now.utc.iso8601
+        }
+      )
+
+      # ***** RUN A CI TEST *****
+      full_repo_name = @payload['repository']['full_name']
+      repository     = @payload['repository']['name']
+      head_sha       = @payload['check_run']['head_sha']
+      clone_repository(full_repo_name, repository, head_sha)
+      # Run RuboCop on all files in the repository - or something like it
+      @report = `ls -lah '#{repository}'`
+      logger.debug @report            
+      # delete this here... but can do better than this... 
+
+
+      # Mark the check run as complete!
+      updated_check_run = @installation_client.patch(
+        "repos/#{@payload['repository']['full_name']}/check-runs/#{@payload['check_run']['id']}",
+        {
+          # This header is necessary for beta access to Checks API
+          accept: 'application/vnd.github.antiope-preview+json',
+          name: 'Octo RuboCop',
+          status: 'completed',
+          conclusion: 'success',
+          completed_at: Time.now.utc.iso8601
+        }
+      )
+    end    
+
+    # Create a new check run with the status queued
+    def create_check_run
+      # # At the time of writing, Octokit does not support the Checks API yet, but
+      # it does provide generic HTTP methods you can use:
+      # https://developer.github.com/v3/checks/runs/#create-a-check-run
+      check_run = @installation_client.post(
+        "repos/#{@payload['repository']['full_name']}/check-runs",
+        {
+          # This header allows for beta access to Checks API
+          accept: 'application/vnd.github.antiope-preview+json',
+          # The name of your check run.
+          name: 'Octo RuboCop',
+          # The payload structure differs depending on whether a check run or a check suite event occurred.
+          head_sha: @payload['check_run'].nil? ? @payload['check_suite']['head_sha'] : @payload['check_run']['head_sha']
+        }
+      )
+    end
+
+
+
 
     # Saves the raw payload and converts the payload to JSON format
     def get_payload_request(request)
