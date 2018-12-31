@@ -138,7 +138,15 @@ class GHAapp < Sinatra::Application
       # Run RuboCop on all files in the repository - or something like it
       @report = `ls -lah '#{repository}'`
       logger.debug @report            
-      # delete this here... but can do better than this... 
+
+      
+      @report = `cd '#{repository}' && make install`        
+      logger.debug @report 
+
+      @conclusion = 'success'         
+      if not $?.success?  then
+        @conclusion = 'failure'
+      end  
 
 
       # Mark the check run as complete!
@@ -149,7 +157,7 @@ class GHAapp < Sinatra::Application
           accept: 'application/vnd.github.antiope-preview+json',
           name: 'Octo RuboCop',
           status: 'completed',
-          conclusion: 'success',
+          conclusion: @conclusion,
           completed_at: Time.now.utc.iso8601
         }
       )
