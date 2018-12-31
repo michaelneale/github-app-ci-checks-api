@@ -140,6 +140,7 @@ class GHAapp < Sinatra::Application
       logger.debug @report            
 
       
+      ## todo need to actually clean this up after
       @report = `cd '#{repository}' && make install`        
       logger.debug @report 
 
@@ -147,6 +148,7 @@ class GHAapp < Sinatra::Application
       if not $?.success?  then
         @conclusion = 'failure'
       end  
+      ## todo look at server.rb for how to set test and annotations/autofix. 
 
 
       # Mark the check run as complete!
